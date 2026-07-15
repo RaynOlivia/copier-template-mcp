@@ -1,146 +1,83 @@
+from os import path
+from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
+from fastmcp.exceptions import ToolError
 import copier_utils
 import asyncio
-from os import path
-from mcp.shared.exceptions import McpError
-from mcp.server import Server
-import mcp.server.stdio as mcpio
-import mcp.types as types
 import json
 
-app = Server('copier-templates')
+mcp = FastMCP('copier-templates')
 
 
-@app.list_tools()
-async def list_tools():
-    '''Return the list of available tools.'''
-
-    return [
-        types.Tool(
-            name='generate-project',
-            description='Generate a new project given a template and a set of parameters',
-            inputSchema={
-                'type': 'object',
-                'properties': {
-                    'template': {
-                        'type': 'string',
-                        'description': 'Name of the template to use',
-                    },
-                    'destination': {
-                        'type': 'string',
-                        'description': 'Path to new project\'s directory',
-                    },
-                    'params': {
-                        'type': 'object',
-                        'description': 'Values for each parameter required by the template',
-                    }
-                },
-                'required': ['template', 'destination', 'params'],
-            },
-        ),
-        types.Tool(
-            name='add-template',
-            description='Add a copier template to the list of available templates',
-            inputSchema={
-                'type': 'object',
-                'properties': {
-                    'uri': {
-                        'type': 'string',
-                        'description': 'Uri to local or remote Git-repo of the template to be added',
-                    },
-                },
-                'required': ['uri'],
-            },
-        ),
-    ]
+@mcp.tool
+async def generate_project(template: str, destination: str, params: dict[str, str]) -> str:
+    """Generate a new project given a template and a set of parameters.
+    
+    Args:
+        template: Name of the template to use.
+        destination: Path to new project's directory.
+        params: Values for each parameter required by the template. Parameter names are provided by get_template_params.
+    """
+    
+    if not template in copier_utils.get_templates():
+        raise ToolError(f'Template does not exist: {template}')
+    if not path.isdir(destination):
+        raise ToolError(f'Destination directory does not exist: {destination}')
+    if not sorted(list(params.keys())) == sorted(list(copier_utils.get_params(template).keys())):
+        raise ToolError(f'Parameter names don\'t match the ones required by template {template}')
+    
+    copier_utils.generate(template, destination, params)
+    return f'Project generated at {destination}'
 
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict):
-    '''Handle tool invocations.'''
-    if name == 'add-template':
-        uri = str(arguments.get('uri'))
-        name = path.splitext(path.basename(path.normpath(uri)))[0]
-        try:
-            copier_utils.clone_template(uri, name)
-        except Exception as e:
-            raise McpError(types.ErrorData(
-                code = types.INTERNAL_ERROR,
-                message = f'Failed to clone template {uri}:\n{e}\n',
-            ))
-        return [types.TextContent(type='text', text=f'Template {uri} is now available under the name {name}')]
+@mcp.tool
+async def add_template(uri: str) -> ToolResult:
+    """Add a copier template to the list of available templates and returns its parameters.
+    Use this when given a git-repo or local path to use as template.
 
-    if name == 'generate-project':
-        template_name = arguments.get('template')
-        destination = arguments.get('destination')
-        parameters = arguments.get('params')
-        if not template_name in copier_utils.get_templates():
-            raise McpError(types.ErrorData(
-                code = types.INVALID_PARAMS,
-                message = f'Template does not exist: {template_name}',
-            ))
-        if not path.isdir(destination):
-            raise McpError(types.ErrorData(
-                code = types.INVALID_PARAMS,
-                message = f'Destination directory does not exist: {destination}',
-            ))
-        if not sorted(list(parameters.keys())) == sorted(list(copier_utils.get_params(template_name).keys())):
-            raise McpError(types.ErrorData(
-                code = types.INVALID_PARAMS,
-                message = f'Parameter names don\'t match the ones required by template {template_name}',
-            ))
-        try:
-            copier_utils.generate(template_name, destination, parameters)
-        except Exception:
-            raise McpError(types.ErrorData(
-                code = types.INTERNAL_ERROR,
-                message = 'Project generation failed',
-            ))
-        return [types.TextContent(type='text', text=f'Project generated at {destination}')]
-        
-    raise McpError(types.ErrorData(
-        code = types.INVALID_PARAMS,
-        message = f'Unknown tool: {name}',
-    ))
-
-
-@app.list_resources()
-async def list_resources():
-    '''Return the list of available resources.'''
-
-    return [
-        types.Resource(
-            uri = f'params://{name}',
-            name = name,
-            description = f'Parameters required by template {name}',
-        )
-        for name in copier_utils.get_templates()
-    ]
-
-
-@app.read_resource()
-async def read_resource(uri: str):
-    '''Handle resource reads.'''
+    Args:
+        uri: Path to local or remote Git-repo of the template to be added.
+    """
 
     try:
-        name = str(uri).split('://')[1].strip('/')
-        assert name in copier_utils.get_templates()
-    except Exception as e:
-        raise McpError(types.ErrorData(
-            code = types.INVALID_PARAMS,
-            message = f'Resource not found: {uri}\n{e}\n',
-        ))
-    else:
-        return json.dumps(copier_utils.get_params(name), indent=2)
+        name = path.splitext(path.basename(path.normpath(uri)))[0]
+    except Exception:
+        raise ToolError(f'Invalid URI: {uri}')
+
+    try:
+        copier_utils.clone_template(uri, name)
+    except Exception:
+        raise ToolError(f'Failed to clone template repo: {uri}')
+    
+    params = copier_utils.get_params(name)
+    return ToolResult(
+        content = f'Template is now available under the name `{name}`.\n'\
+                  f'It has {len(params)} parameters: `{"`, `".join([ p["name"] for p in params ])}`.',
+        structured_content = {'params': params}
+    )
 
 
-async def main():
-    async with mcpio.stdio_server() as (read_stream, write_stream):
-        await app.run(
-            read_stream,
-            write_stream,
-            app.create_initialization_options(),
-        )
+@mcp.tool
+async def list_templates() -> list[str]:
+    """List available templates."""
+
+    return copier_utils.get_templates()
+
+
+@mcp.tool
+async def get_template_params(template: str) -> ToolResult:
+    """Get list of parameters required by a given template with names, types and descriptions.
+    
+    Args:
+        template: Name of template to inspect.
+    """
+
+    params = copier_utils.get_params(template)
+    return ToolResult(
+        content = f'{template} has {len(params)} parameters: `{"`, `".join([ p["name"] for p in params ])}`.',
+        structured_content = {'params': params}
+    )
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    mcp.run()
