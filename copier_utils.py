@@ -1,10 +1,5 @@
-#!./venv/bin/python3
-
-import sys
 import yaml
 import copier
-import shutil
-import asyncio
 from git import Repo
 from os import path, listdir
 
