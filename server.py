@@ -3,7 +3,6 @@ from fastmcp import FastMCP, Context
 from fastmcp.tools.tool import ToolResult
 from fastmcp.exceptions import ToolError
 from pydantic import Field, create_model
-from typing import Annotated
 from pydoc import locate
 import copier_utils
 import asyncio
@@ -11,37 +10,38 @@ import asyncio
 mcp = FastMCP('copier-templates')
 
 
+def get_python_type(copier_type: str):
+    # copier types: bool, float, int, json, path, str, yaml
+    if copier_type in ('json', 'path', 'yaml', None):
+        return str
+    else:
+        return locate(copier_type) or str
+
+
 def get_param_request_model(destination: str, params: dict, schema: dict):
     fields = {'PROJECT_PATH': (str, Field(
-        description = f'- Contents will be overriden if not empty! - def: {destination}',
+        description = f'- Contents will be overriden if not empty! - DEFAULT: {destination}',
         default = destination
     ))}
     for key, value in schema.items():
-        # copier types: bool, float, int, json, path, str, yaml
-        ctype = value.get('type')
-        if ctype is None:
-            ctype = 'str'
-            ptype = str
-        elif ctype in ('json', 'path', 'yaml'):
-            ptype = str
-        else:
-            ptype = locate(ctype)
-
+        ctype = value.get('type') or str
+        ptype = get_python_type(ctype)
         description = f'- {value["description"]} ({ctype}) - '
         entry = params.get(key)
         if entry is None or entry == '':
             entry = None
             description += 'REQUIRED'
         else:
-            description += f'def: {entry}'
+            description += f'DEFAULT: {entry}'
+            entry = ptype(entry)
 
         fields[key] = (ptype, Field(description = description, default = entry))
 
     return create_model('TemplateParameters', **fields)
 
 
-@mcp.tool(timeout = 1800.0)
-async def generate_project(ctx: Context, template: str, destination: str, params: dict[str, str]) -> str:
+@mcp.tool
+async def generate_project(ctx: Context, template: str, destination: str, params: dict) -> str:
     """Generate a new project given a template and a set of parameters.
     
     Args:
@@ -55,13 +55,18 @@ async def generate_project(ctx: Context, template: str, destination: str, params
     schema = copier_utils.get_params(template)
 
     response = await ctx.elicit(
-        message = 'Please confirm project parameters',
+        'Please confirm project parameters',
         response_type = get_param_request_model(destination, params, schema)
     )
     match response.action:
         case 'accept':
-            final_params = {key: getattr(response.data, key) for key in schema}
-            copier_utils.generate(template, response.data.PROJECT_PATH, final_params)
+            final_params = {}
+            for key, val in schema.items():
+                ptype = get_python_type(val.get('type'))
+                final_params[key] = ptype(getattr(response.data, key))
+
+            coro = asyncio.to_thread(copier_utils.generate, template, response.data.PROJECT_PATH, final_params)
+            await coro
             return f'Project created at {response.data.PROJECT_PATH}'
 
         case 'decline':

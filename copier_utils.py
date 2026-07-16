@@ -62,12 +62,13 @@ def generate(name: str, dst_path: str, params: dict):
         data = params,
         overwrite = True,
         quiet = True,
+        skip_tasks = True,
     )
 
 
 def clone_template(uri: str, name: str):
     dst_path = path.join(TEMPLATES_DIR, name)
-    if path.exists(dst_path):
-        rmtree(dst_path)
+    # if path.exists(dst_path):
+    #     rmtree(dst_path)
     Repo.clone_from(uri, dst_path)
 
