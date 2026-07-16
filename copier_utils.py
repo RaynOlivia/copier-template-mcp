@@ -1,8 +1,8 @@
 import yaml
 import copier
-import shutil
 from git import Repo
-from os import path, listdir
+from shutil import rmtree
+from os import path, listdir, makedirs
 
 TEMPLATES_DIR = 'templates'
 VALID_YAMLS = [
@@ -37,22 +37,25 @@ def get_params(name: str) -> list:
     if yam is None:
         raise Exception('copier.yaml file does not exist')
 
-    out = []
+    out = {}
     for key in yam:
         if key[0] == '_':
             continue
-        param = {'name': key}
+        
+        out[key] = {}
         if 'type' in yam[key]:
-            param['type'] = yam[key]['type']
+            out[key]['type'] = yam[key]['type']
         if 'help' in yam[key]:
-            param['description'] = yam[key]['help']
+            out[key]['description'] = yam[key]['help']
         #TODO: add choices if available
-        out.append(param)
 
     return out
 
 
 def generate(name: str, dst_path: str, params: dict):
+    if path.exists(dst_path):
+        rmtree(dst_path)
+    makedirs(dst_path, exist_ok = True)
     copier.run_copy(
         src_path = path.join(TEMPLATES_DIR, name),
         dst_path = dst_path,
@@ -63,8 +66,8 @@ def generate(name: str, dst_path: str, params: dict):
 
 
 def clone_template(uri: str, name: str):
-    dest = path.join(TEMPLATES_DIR, name)
-    if path.exists(dest):
-        shutil.rmtree(dest)
-    Repo.clone_from(uri, dest)
+    dst_path = path.join(TEMPLATES_DIR, name)
+    if path.exists(dst_path):
+        rmtree(dst_path)
+    Repo.clone_from(uri, dst_path)
 
