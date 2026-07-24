@@ -1,7 +1,9 @@
 import yaml
 import copier
+import multiprocessing
 from git import Repo
 from shutil import rmtree
+from unittest.mock import patch
 from os import path, listdir, makedirs
 
 TEMPLATES_DIR = 'templates'
@@ -72,3 +74,16 @@ def clone_template(uri: str, name: str):
     #     rmtree(dst_path)
     Repo.clone_from(uri, dst_path)
 
+
+def interactive_generate(name: str, dst_path: str, handler):
+    if path.exists(dst_path):
+        rmtree(dst_path)
+    makedirs(dst_path, exist_ok = True)
+    with patch('copier._main.unsafe_prompt', handler):
+        copier.run_copy(
+            src_path = path.join(TEMPLATES_DIR, name),
+            dst_path = dst_path,
+            overwrite = True,
+            quiet = True,
+            pretend = True,
+        )
