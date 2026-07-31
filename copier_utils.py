@@ -8,6 +8,8 @@ from os import path, listdir, makedirs
 from functools import partial
 import multiprocessing as mp
 import logging
+import queue
+import time
 
 TEMPLATES_DIR = 'templates'
 VALID_YAMLS = [
@@ -41,40 +43,6 @@ def get_templates() -> list[str]:
     ]
 
 
-def get_params(name: str) -> list:
-    yam = get_copier_file(name)
-    if yam is None:
-        raise Exception('copier.yaml file does not exist')
-
-    out = {}
-    for key in yam:
-        if key[0] == '_':
-            continue
-        
-        out[key] = {}
-        if 'type' in yam[key]:
-            out[key]['type'] = yam[key]['type']
-        if 'help' in yam[key]:
-            out[key]['description'] = yam[key]['help']
-        #TODO: add choices if available
-
-    return out
-
-
-def generate(name: str, dst_path: str, params: dict):
-    if path.exists(dst_path):
-        rmtree(dst_path)
-    makedirs(dst_path, exist_ok = True)
-    copier.run_copy(
-        src_path = path.join(TEMPLATES_DIR, name),
-        dst_path = dst_path,
-        data = params,
-        overwrite = True,
-        quiet = True,
-        skip_tasks = True,
-    )
-
-
 def clone_template(uri: str, name: str):
     dst_path = path.join(TEMPLATES_DIR, name)
     # if path.exists(dst_path):
@@ -90,9 +58,11 @@ class Generator():
         self._in_q = mp.Queue()
         self._out_q = mp.Queue()
 
-        self.proc = mp.Process(target = self._run_copy_proc, args = [self._in_q, self._out_q])
-        log.debug('starting process..')
+        self.proc = mp.Process(target = self._run_copy_proc)
         self.proc.start()
+        self.current_question = None
+        self.last_answer = None
+        self.data = {}
         log.debug('generator initialized')
 
 
@@ -102,21 +72,38 @@ class Generator():
 
     def next_question(self) -> (dict|None, str|None):
         try:
-            log.debug('client requested next question')
-            a, b = self._out_q.get()
-            log.debug(f'client got response!')
+            while True:
+                try:
+                    a, b = self._out_q.get_nowait()
+                    break
+                except queue.Empty:
+                    if self.proc.is_alive():
+                        time.sleep(1)
+                    else:
+                        log.debug('proc has closed. saving last response')
+                        self._log_data()
+                        self.current_question = None
+                        return None, None
+            if b is None:
+                self._log_data()
+
             if a is not None:
-                return cloudpickle.loads(a), b
+                self.current_question = cloudpickle.loads(a)
             else:
-                return None, b
-        except ValueError:
+                self.current_question = None
+            return self.current_question, b
+        except Exception:
             log.debug('queue closed while reading!')
-            return None, None
+
+        self._log_data()
+        self.current_question = None
+        return None, None
 
 
-    def respond(self, reply: str) -> bool:
+    def respond(self, reply: str|list[str]) -> bool:
         try:
             self._in_q.put(reply)
+            self.last_answer = reply
             return True
         except ValueError:
             return False
@@ -134,12 +121,31 @@ class Generator():
         return self.join()
 
 
+    def generate(self):
+        if path.exists(self.dst_path):
+            rmtree(self.dst_path)
+        makedirs(self.dst_path, exist_ok = True)
+        copier.run_copy(
+            src_path = path.join(TEMPLATES_DIR, self.template),
+            dst_path = self.dst_path,
+            data = {key: val['answer'] for key, val in self.data.items()},
+            overwrite = True,
+            quiet = True,
+            skip_tasks = True,
+        )
+
+
+    def _log_data(self):
+        if self.current_question is not None and self.last_answer is not None:
+            self.data[self.current_question['name']] = {'answer': self.last_answer, 'question': self.current_question}
+
+
     def _io_handler(self, in_queue, out_queue, questions, answers, **kwargs):
         question = questions[0]
         log.debug(f'NEW QUESTION: {question['name']}')
-        if not question['when']('nya~'):
-            log.debug('skipping question')
-            return {}
+        # if not question['when']('nya~'):
+        #     log.debug('skipping question')
+        #     return {}
 
         log.debug('writing to queue')
         out_queue.put((cloudpickle.dumps(question), None))
@@ -159,7 +165,7 @@ class Generator():
         return {question['name']: out_filter(reply)}
 
 
-    def _run_copy_proc(self, in_queue, out_queue):
+    def _run_copy_proc(self):
         if path.exists(self.dst_path):
             rmtree(self.dst_path)
         makedirs(self.dst_path, exist_ok = True)
@@ -173,7 +179,9 @@ class Generator():
                 quiet = True,
                 pretend = True,
             )
+            log.debug('ran copy!')
 
         log.debug('post patch. closing queues')
-        out_queue.close()
-        in_queue.close()
+        self._out_q.close()
+        self._in_q.close()
+        log.debug('queues closed. process is done')
