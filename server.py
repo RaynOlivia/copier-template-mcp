@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from os import path
 from pydoc import locate
 from typing import Literal
@@ -9,6 +10,10 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, create_model
 import copier_utils
 
+
+log = logging.Logger('MCP-server')
+log.addHandler(logging.FileHandler('server.log', mode='a'))
+log.setLevel(10)
 
 mcp = FastMCP('copier-templates')
 
@@ -37,6 +42,21 @@ def get_param_request_model(params: dict, to_revise: list):
     return create_model('TemplateParameters', **fields)
 
 
+def get_sampling_model(question: dict):
+    fields = {'reasoning': (str, Field(description = 'a thinking process'))}
+    match question['type']:
+        case 'select':
+            fields['selection'] = (int, Field(description = 'number of chosen option'))
+        case 'checkbox':
+            fields['selections'] = (list[int], Field(description = 'list of numbers of chosen options'))
+        case 'confirm':
+            fields['response'] = (bool, Field(description = 'yes (True) or no (False)'))
+        case _:
+            fields['response'] = (str, Field(description = 'final parameter value'))
+
+    return create_model('SamplingResponse', **fields)
+
+
 @mcp.tool
 async def generate_project(ctx: Context, template: str, destination: str, description: str) -> str:
     """Generate a new project given a copier template name and a project description. Use when asked to create a project from a template
@@ -49,63 +69,74 @@ async def generate_project(ctx: Context, template: str, destination: str, descri
     
     if not template in copier_utils.get_templates():
         raise ToolError(f'Template not found: {template}')
-    schema = copier_utils.get_params(template)
 
     sampling_system_prompt = (
-        f'You are generating a software project using a copier template: {description}\n'
-        'Based on this description fill in the following template parameters.'
-    ),
+        f'You are generating a software project using a template: {description}\n'
+        'Based on this description fill in the following template parameters. \n'
+        'Respond only with the final parameter value'
+    )
     sampling_messages = []
-    sampling_answers = {'PROJECT_PATH': destination}
+    sampling_answers = {'PROJECT_PATH': {
+        'question': {
+            'type': 'path',
+            'name': 'PROJECT_PATH',
+            'message': 'Path to new project. Will be overwritten if exists!'
+        },
+        'answer': destination
+    }}
 
-    def question_handler(questions, answers, **kwargs):
-        nonlocal sampling_messages
-        nonlocal sampling_answers
+    log.debug(f'STARTING COPIER')
+    generator = copier_utils.Generator(template, destination)
+    
+    question, repeat = generator.next_question()
+    log.debug(f'queshn: {question['name']}')
+    while question is not None:
+        if repeat is None:
+            next_message = question.get('message', question['name']).strip()
+        else:
+            next_message = repeat + '. Try again!'
 
-        question = questions[0]
-        if not question['when']('UwU'):
-            return {}
+        if 'choices' in question:
+            if question['type'] == 'select':
+                next_message += '\nSelect one of the following options:\n'
+            else:
+                next_message += '\nSelect any number of the following options:\n'
+            next_message += '\n'.join([f'  {i}) {c}' for i, c in enumerate(question['choices'])])
+
+        log.debug(f'QUESTION: {next_message}')
 
         sampling_messages.append(SamplingMessage(
             role = 'user',
-            content = TextContent(type = 'text', content = question.get('message', question['name']))
+            content = TextContent(type = 'text', text = next_message)
         ))
-        response = ctx.sample(
+        sampling_response = await ctx.sample(
             system_prompt = sampling_system_prompt,
-            messages = sampling_messages
+            messages = sampling_messages,
+            result_type = get_sampling_model(question)
         )
-        sampling_messages = response.history
+        sampling_messages = sampling_response.history
 
-        validator = question.get('validate')
-        while callable(validator):
-            verdict = validator(response.text)
-            if verdict == True:
-                break
-            else:
-                sampling_messages.append(SamplingMessage(
-                    role = 'user',
-                    content = TextContent(type = 'text', content = f'{verdict}. Try again.')
-                ))
-                response = ctx.sample(
-                    system_prompt = sampling_system_prompt,
-                    messages = sampling_messages
-                )
-                sampling_messages = response.history
+        log.debug(f'ANSWER!: {sampling_response.result}')
 
-        out_filter = question.get('filter', lambda x: x)
-        answer = out_filter(response.text)
-        sampling_answers[question['name']] = {'question': question, 'answer': answer}
-        return {question['name']: answer}
-    
-    coro = asyncio.to_thread(copier_utils.interactive_generate, template, destination, question_handler)
-    await coro
+        match question['type']:
+            case 'select':
+                reply = question['choices'][sampling_response.result.selection]
+            case 'checkbox':
+                reply = [question['choices'][i] for i in sampling_response.result.selections]
+            case _:
+                reply = sampling_response.result.response
+        
+        generator.respond(reply)
+        question, repeat = generator.next_question()
+        if repeat is None:
+            sampling_answers[question['name']] = {'question': question, 'answer': reply}
 
     response = await ctx.elicit(
         'Are the following parameters acceptable? If not, select the ones you wish to edit',
         response_type = [[f'{key} = {val["answer"]}' for key, val in sampling_answers.items()]]
     )
     if response.action == 'accept' and len(response.data) > 0:
-        revise = [line.split(' = ', 1) for line in response.data]
+        revise = [line.split(' = ', 1)[0] for line in response.data]
         param_response = await ctx.elicit(
             'Please review project parameters',
             response_type = get_param_request_model(sampling_answers, revise)
@@ -131,6 +162,50 @@ async def generate_project(ctx: Context, template: str, destination: str, descri
     await coro
     return f'Project created at {response.data.PROJECT_PATH}'
 
+
+
+    # def question_handler(questions, answers):
+    #     nonlocal sampling_messages
+    #     nonlocal sampling_answers
+
+    #     question = questions[0]
+    #     if not question['when']('UwU'):
+    #         return {}
+
+    #     # log.debug('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+    #     # log.debug(type(question.get('message')))
+    #     # log.debug(repr(question.get('message')))
+
+    #     sampling_messages.append(SamplingMessage(
+    #         role = 'user',
+    #         content = TextContent(type = 'text', text = question.get('message', question['name']))
+    #     ))
+    #     response = ctx.sample(
+    #         system_prompt = sampling_system_prompt,
+    #         messages = sampling_messages
+    #     )
+    #     sampling_messages = response.history
+
+    #     validator = question.get('validate')
+    #     while callable(validator):
+    #         verdict = validator(response.text)
+    #         if verdict == True:
+    #             break
+    #         else:
+    #             sampling_messages.append(SamplingMessage(
+    #                 role = 'user',
+    #                 content = TextContent(type = 'text', content = f'{verdict}. Try again.')
+    #             ))
+    #             response = ctx.sample(
+    #                 system_prompt = sampling_system_prompt,
+    #                 messages = sampling_messages
+    #             )
+    #             sampling_messages = response.history
+
+    #     out_filter = question.get('filter', lambda x: x)
+    #     answer = out_filter(response.text)
+    #     sampling_answers[question['name']] = {'question': question, 'answer': answer}
+    #     return {question['name']: answer}
 
 
 
