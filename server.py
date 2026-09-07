@@ -32,13 +32,13 @@ def get_param_request_model(params: dict, to_revise: list):
     for key in to_revise:
         match params[key]['question']['type']:
             case 'select':
-                fields[key] = (Literal[*params[key]['question']['choices']], Field(description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
+                fields[key] = (Literal[*params[key]['question']['choices']], Field(title = key, description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
             case 'checkbox':
-                fields[key] = (list[Literal[*params[key]['question']['choices']]], Field(description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
+                fields[key] = (list[Literal[*params[key]['question']['choices']]], Field(title = key, description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
             case 'confirm':
-                fields[key] = (bool, Field(description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
+                fields[key] = (bool, Field(title = key, description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
             case _:
-                fields[key] = (str, Field(description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
+                fields[key] = (str, Field(title = key, description = f'({params[key]['question'].get('message', '')})', default = params[key]['answer']))
 
     return create_model('TemplateParameters', **fields)
 
@@ -81,15 +81,20 @@ async def set_next_parameter(ctx: Context, response: str|list[str]):
     else:
         log.debug('no more questions. starting elicitation')
         revise_response = await ctx.elicit(
-            'Are the following parameters acceptable? If not, select the ones you wish to edit',
-            response_type = [[f'{key} = {val["answer"]}' for key, val in generator.data.items()]]
+            message = 'Would you like to review the template parameters before generation?',
+            response_title = 'Revision',
+            response_description = 'Select the parameter values you wish to revise (parameter names in brackets)',
+            response_type = [{str(key): {'title': str(val["answer"])} for key, val in generator.data.items()}]
         )
+        log.debug(f'pre post elic: {"; ".join(revise_response.data)}')
         if revise_response.action == 'accept' and len(revise_response.data) > 0:
-            revise = [line.split(' = ', 1)[0] for line in revise_response.data]
+            revise = [line for line in revise_response.data]
+            log.debug('pre elic')
             param_response = await ctx.elicit(
-                'Please review project parameters',
+                message = 'Please review the selected parameters',
                 response_type = get_param_request_model(generator.data, revise)
             )
+            log.debug('post elic')
             if param_response.action == 'accept':
                 for key in revise:
                     new_answer = getattr(param_response.data, key)
@@ -101,11 +106,12 @@ async def set_next_parameter(ctx: Context, response: str|list[str]):
                     else:
                         return 'Project generation cancelled'  # TODO: re-elicit!
             elif param_response.action == 'cancel':
-                return 'Project generation cancelled'
+                return 'Project generation cancelled by user'
             # on decline procede with original params
             
         elif revise_response.action == 'cancel':
-            return 'Project generation cancelled'
+            return 'Project generation cancelled by user'
+        # on decline procede with generation without changes
         
         log.debug('starting generator')
         coro = asyncio.to_thread(generator.generate)
