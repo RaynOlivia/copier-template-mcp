@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from os import path
+from os import path, getcwd
 from pydoc import locate
 from typing import Literal
 import requests
@@ -11,6 +11,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field, create_model
 import copier_utils
 
+DEFAULT_PROJ_PATH = 'default_projects'
 
 log = logging.Logger('MCP-server')
 log.addHandler(logging.FileHandler('server.log', mode='a'))
@@ -58,7 +59,7 @@ def get_param_request_model(params: dict, to_revise: list):
 def get_next_question_output(question: dict, error: str|None = None) -> ToolResult:
     response_dict = {
         'next_question': question.get('message', question['name']).strip(),
-        'instructions': 'Call the `set_next_parameter` tool to submit a value'
+        'instructions': 'Call the `set_next_parameter` tool to submit an answer'
     }
     if 'choices' in question:
         response_dict['options'] = question.choices
@@ -74,6 +75,78 @@ def get_next_question_output(question: dict, error: str|None = None) -> ToolResu
     )
 
 
+async def finish_generation(ctx: Context):
+    log.debug('no more questions. starting elicitation')
+    update = generator.update
+    verb = 'update' if update else 'generation'
+
+    revise_response = await ctx.elicit(
+        message =   'Template parameters have changed. Would you like to review new parameters before update?' if update else \
+                    'Would you like to review the template parameters before generation?',
+        response_title = 'Revision',
+        response_description = 'Select the parameter values you wish to revise (parameter names in brackets)',
+        response_type = [{str(key): {'title': str(val["answer"])} for key, val in generator.data.items()}]
+    )
+    log.debug('pre post elic')
+    if revise_response.action == 'accept' and len(revise_response.data) > 0:
+        revise = [line for line in revise_response.data]
+        log.debug('pre elic')
+        param_response = await ctx.elicit(
+            message = 'Please review the selected parameters',
+            response_type = get_param_request_model(generator.data, revise)
+        )
+        log.debug('post elic')
+        if param_response.action == 'accept':
+            for key in revise:
+                new_answer = getattr(param_response.data, key)
+                validator = generator.data[key]['question'].get('validate', lambda _: True)
+                out_filter = generator.data[key]['question'].get('filter', lambda x: x)
+                verdict = validator(new_answer)
+                if verdict == True:
+                    generator.data[key]['answer'] = out_filter(new_answer)
+                else:
+                    return f'Project {verb} cancelled'  # TODO: re-elicit!
+        elif param_response.action == 'cancel':
+            return f'Project {verb} cancelled by user'
+        # on decline procede with original params
+        
+    elif revise_response.action == 'cancel':
+        return f'Project {verb} cancelled by user'
+    # on decline procede with generation without changes
+    
+    log.debug(f'starting {verb}')
+    coro = asyncio.to_thread(generator.generate)
+    await coro
+    if update:
+        conflicts = generator.get_merge_conflicts()
+        if len(conflicts) < 1:
+            return 'Project updated successfully!'
+        return ToolResult(
+            structured_content = {
+                'merge_conflicts': conflicts,
+                'instructions': f'Project updated! Now resolve the merge conflicts in these files within {generator.dst_path!r}.' \
+                                 'Consult README and commit history for context and attempt to preserve the intent behind both changes.' \
+                                 'Prefer current changes over incoming if conflict is unresolvable. Ask user for input if necessary'
+            }
+        )
+    return f'Project created successfully at {generator.dst_path}'
+
+
+async def start_new_generator(ctx: Context, update: bool, destination: str, template: str = ''):
+    global generator
+    destination = path.expanduser(path.expandvars(path.join(getcwd(), DEFAULT_PROJ_PATH, destination)))
+    if generator is not None:
+        generator.cancel()
+
+    generator = copier_utils.Generator(template, destination, update)
+
+    question, _ = generator.next_question()
+    if question is None:
+        return await finish_generation(ctx)
+    return get_next_question_output(question)
+
+
+
 @mcp.tool
 async def set_next_parameter(ctx: Context, response: str|list[str]):
     """Fill in a parameter for the template currently being generated and receive the prompt for the next parameter
@@ -83,8 +156,9 @@ async def set_next_parameter(ctx: Context, response: str|list[str]):
         response: Value for the next template parameter
 
     Returns:
-        Next template parameter to set by calling the `set_next_parameter` tool again
+        Next template parameter to set and instructions on what to do next
     """
+    # Next template parameter to set by calling the `set_next_parameter` tool again
     generator.respond(response)
     log.debug('getting next question')
     question, error = generator.next_question()
@@ -93,64 +167,41 @@ async def set_next_parameter(ctx: Context, response: str|list[str]):
         return get_next_question_output(question, error)
 
     else:
-        log.debug('no more questions. starting elicitation')
-        revise_response = await ctx.elicit(
-            message = 'Would you like to review the template parameters before generation?',
-            response_title = 'Revision',
-            response_description = 'Select the parameter values you wish to revise (parameter names in brackets)',
-            response_type = [{str(key): {'title': str(val["answer"])} for key, val in generator.data.items()}]
-        )
-        log.debug(f'pre post elic: {"; ".join(revise_response.data)}')
-        if revise_response.action == 'accept' and len(revise_response.data) > 0:
-            revise = [line for line in revise_response.data]
-            log.debug('pre elic')
-            param_response = await ctx.elicit(
-                message = 'Please review the selected parameters',
-                response_type = get_param_request_model(generator.data, revise)
-            )
-            log.debug('post elic')
-            if param_response.action == 'accept':
-                for key in revise:
-                    new_answer = getattr(param_response.data, key)
-                    validator = generator.data[key]['question'].get('validate', lambda _: True)
-                    out_filter = generator.data[key]['question'].get('filter', lambda x: x)
-                    verdict = validator(new_answer)
-                    if verdict == True:
-                        generator.data[key]['answer'] = out_filter(new_answer)
-                    else:
-                        return 'Project generation cancelled'  # TODO: re-elicit!
-            elif param_response.action == 'cancel':
-                return 'Project generation cancelled by user'
-            # on decline procede with original params
-            
-        elif revise_response.action == 'cancel':
-            return 'Project generation cancelled by user'
-        # on decline procede with generation without changes
-        
-        log.debug('starting generator')
-        coro = asyncio.to_thread(generator.generate)
-        await coro
-        return f'Project created successfully at {generator.dst_path}'
+        return await finish_generation(ctx)
 
 
 @mcp.tool
-async def start_project(template: str, destination: str):
+async def start_project(ctx: Context, template: str, destination: str):
     """Start generating a new projec using a given copier template
     
     Args:
         template: Name of the template to use
-        destination: Path to new project's directory
+        destination: Absolute path to new project's directory
 
     Returns:
-        First template parameter to fill in using the `set_next_parameter` tool
+        First template parameter to fill in using the `set_next_parameter` tool and instructions on what to do next
     """
-    global generator
-    if generator is not None:
-        generator.cancel()
-    generator = copier_utils.Generator(template, destination)
+    try:
+        return await start_new_generator(ctx, False, destination, template)
+    except Exception as e:
+        raise ToolError(str(e))
 
-    question, _ = generator.next_question()
-    return get_next_question_output(question)
+
+@mcp.tool
+async def update_project(ctx: Context, project_path: str):
+    """Update a template-generated project if template has changed since generation
+    Might require new parameters to be set using `set_next_parameter` tool
+
+    Args:
+        project_path: Absolute path to project directory
+
+    Returns:
+        Instructions on what to do next
+    """
+    try:
+        return await start_new_generator(ctx, True, project_path)
+    except Exception as e:
+        raise ToolError(str(e))
 
 
 @mcp.tool
@@ -165,7 +216,7 @@ async def search_github_for_templates(query: str) -> list[dict[str, str]]:
         List of at most 200 search results
     """
     url = f'https://api.github.com/search/repositories?q=copier+template+{requests.utils.quote(query.strip())}'
-    response = requests.get(url)
+    response = requests.get(url, timeout = 20)
     response.raise_for_status()
     results = response.json().get('items', [])
     return [{

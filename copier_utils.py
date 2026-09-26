@@ -1,15 +1,15 @@
-import git
-import yaml
-import copier
-import cloudpickle
 from shutil import rmtree
 from unittest.mock import patch
-from os import path, listdir, makedirs
+from os import path, makedirs
 from functools import partial
 import multiprocessing as mp
 import logging
 import queue
 import time
+import git
+import yaml
+import copier
+import cloudpickle
 
 TEMPLATES_DIR = 'templates'
 TEMPLATES_FILE = path.join(TEMPLATES_DIR, 'templates.yaml')
@@ -55,7 +55,6 @@ def add_template(name, path, description) -> None:
         yaml.dump(templates, file)
 
 
-
 def clone_template(uri: str, name: str):
     dst_path = path.join(TEMPLATES_DIR, name)
     # if path.exists(dst_path):
@@ -69,10 +68,10 @@ def get_template_path(template):
         return None
 
     elif not path.isabs(template_path) and load_yaml(path.join(TEMPLATES_DIR, template_path, 'copier.yaml')) is not None:
-        return path.join(TEMPLATES_DIR, template_path)
+        return path.abspath(path.join(TEMPLATES_DIR, template_path))
 
     elif load_yaml(path.join(template_path, 'copier.yaml')) is not None:
-        return template_path
+        return path.abspath(template_path)
 
     try:
         git.cmd.Git().ls_remote(template_path)
@@ -83,14 +82,32 @@ def get_template_path(template):
 
 
 class Generator():
-    def __init__(self, template: str, dst_path: str):
+    def __init__(self, template: str, dst_path: str, update: bool = False):
         self.template = template
         self.dst_path = dst_path
+        self.update = update
 
         self._in_q = mp.Queue()
         self._out_q = mp.Queue()
 
-        self.template_path = get_template_path(self.template)
+        if self.update:
+            if load_yaml(path.join(self.dst_path, '.copier-answers.yml')) is None:
+                raise Exception('project is not generated from copier template')
+            try:
+                self.repo = git.Repo(self.dst_path)
+            except git.exc.InvalidGitRepositoryError:
+                try:
+                    log.debug('creating git repo')
+                    self.repo = git.Repo.init(self.dst_path)
+                    self.repo.git.add(all = True)
+                    self.repo.index.commit('initial commit')
+                except Exception as e:
+                    raise Exception(f'failed to initialize git repo: {e}')
+            except git.exc.NoSuchPathError:
+                raise Exception('invalid project path')
+        else:
+            self.template_path = get_template_path(self.template)
+
         self.proc = mp.Process(target = self._run_copy_proc)
         self.proc.start()
         self.current_question = None
@@ -101,6 +118,10 @@ class Generator():
 
     def __del__(self):
         self.cancel()
+
+
+    def get_merge_conflicts(self) -> list[str]:
+        return list(self.repo.index.unmerged_blobs().keys())
 
 
     def next_question(self) -> (dict|None, str|None):
@@ -155,17 +176,28 @@ class Generator():
 
 
     def generate(self):
-        if path.exists(self.dst_path):
-            rmtree(self.dst_path)
-        makedirs(self.dst_path, exist_ok = True)
-        copier.run_copy(
-            src_path = self.template_path,
-            dst_path = self.dst_path,
-            data = {key: val['answer'] for key, val in self.data.items()},
-            overwrite = True,
-            quiet = True,
-            skip_tasks = True,
-        )
+        if self.update:
+            copier.run_update(
+                dst_path = self.dst_path,
+                data = {key: val['answer'] for key, val in self.data.items()},
+                overwrite = True,
+                quiet = True,
+                skip_tasks = True,
+                skip_answered = True,
+                conflict = 'inline',
+            )
+        else:
+            if path.exists(self.dst_path):
+                rmtree(self.dst_path)
+            makedirs(self.dst_path, exist_ok = True)
+            copier.run_copy(
+                src_path = self.template_path,
+                dst_path = self.dst_path,
+                data = {key: val['answer'] for key, val in self.data.items()},
+                overwrite = True,
+                quiet = True,
+                skip_tasks = True,
+            )
 
 
     def _log_data(self):
@@ -195,20 +227,32 @@ class Generator():
 
 
     def _run_copy_proc(self):
-        if path.exists(self.dst_path):
-            rmtree(self.dst_path)
-        makedirs(self.dst_path, exist_ok = True)
         log.debug('pre patch')
         with patch('copier._main.unsafe_prompt', new = partial(self._io_handler, self._in_q, self._out_q)):
-            log.debug('running copy...')
-            copier.run_copy(
-                src_path = self.template_path,
-                dst_path = self.dst_path,
-                overwrite = True,
-                quiet = True,
-                pretend = True,
-            )
-            log.debug('ran copy!')
+            if self.update:
+                log.debug('running update...')
+                copier.run_update(
+                    dst_path = self.dst_path,
+                    skip_answered = True,
+                    overwrite = True,
+                    quiet = True,
+                    pretend = True,
+                )
+                log.debug('ran update!')
+
+            else:
+                if path.exists(self.dst_path):
+                    rmtree(self.dst_path)
+                makedirs(self.dst_path, exist_ok = True)
+                log.debug('running copy...')
+                copier.run_copy(
+                    src_path = self.template_path,
+                    dst_path = self.dst_path,
+                    overwrite = True,
+                    quiet = True,
+                    pretend = True,
+                )
+                log.debug('ran copy!')
 
         log.debug('post patch. closing queues')
         self._out_q.close()
