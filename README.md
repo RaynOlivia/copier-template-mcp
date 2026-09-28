@@ -20,3 +20,8 @@ CopierMCP is developed to work with the [Pi harness](https://pi.dev/) using [Pi 
 - Github search for new templates
 - Locally maintained template list
 - User confirmations for project parameters and template list changes
+
+
+## License
+Licensed under the GNU General Public License, version 3: ([LICENSE](LICENSE) or
+<https://www.gnu.org/licenses/gpl-3.0.html>)
