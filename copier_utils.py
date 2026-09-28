@@ -55,13 +55,6 @@ def add_template(name, path, description) -> None:
         yaml.dump(templates, file)
 
 
-def clone_template(uri: str, name: str):
-    dst_path = path.join(TEMPLATES_DIR, name)
-    # if path.exists(dst_path):
-    #     rmtree(dst_path)
-    git.Repo.clone_from(uri, dst_path)
-
-
 def get_template_path(template):
     template_path = get_templates().get(template, {}).get('path')
     if not template_path:

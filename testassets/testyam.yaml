@@ -1,0 +1,8 @@
+a: this is a test string
+b:
+  ba: 13.37
+  bb: 44
+c:
+  - uwu
+  - owo
+  - false
