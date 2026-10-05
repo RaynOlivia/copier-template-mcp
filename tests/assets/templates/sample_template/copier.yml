@@ -1,0 +1,68 @@
+project_name:
+  type: str
+  help: Name of project
+  default: test-sample
+
+eels:
+  type: int
+  help: Number of eels
+  default: 666
+  validator: "{% if eels < 0 %}Can't have negative eels{% endif %}"
+
+snack_cost:
+  type: float
+  help: Estimated snack expenses to complete project
+  default: 13.90
+
+hottodogu:
+  type: bool
+  help: Do you like hotdog?
+  default: no
+
+config_path:
+  type: path
+  help: A path
+  default: "."
+
+extra_yam:
+  type: yaml
+  help: Extra YAML data
+  multiline: true
+
+extra_jas:
+  type: json
+  help: Extra JSON data
+  multiline: true
+
+
+snack_payer:
+  type: str
+  help: Who pays for the snacks?
+  when: "{% if snack_cost > 2.0 %}true{% endif %}"
+
+eel_name:
+  type: str
+  help: Name of solitary eel
+  when: "{% if eels == 1 %}true{% endif %}"
+  default: ""
+
+
+config_file:
+  help: Config file name
+  choices:
+    - "{{ config_path }}/config.txt"
+    - "{{ config_path }}/settings.conf"
+    - "{{ config_path }}/{{ project_name }}.conf"
+
+number_picks:
+  help: Pick your lucky numbers
+  choices:
+    - 1
+    - 0
+    - 42
+    - 1337
+    - 1312
+    - 666
+  multiselect: true
+
+# todo: test yaml file include

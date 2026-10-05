@@ -16,18 +16,29 @@
 
 import os
 import shutil
-# import pytest
+import pytest
 import copier_utils
+from tests.fixtures import tmp_template_dir
 
-copier_utils.TEMPLATES_DIR = os.path.join('testassets', 'templates')
-copier_utils.TEMPLATES_FILE = os.path.join(copier_utils.TEMPLATES_DIR, 'templates.yaml')
+
+# @pytest.fixture
+# def tmp_template_dir(tmp_path):
+#     skel_path = os.path.join('tests', 'assets', 'templates')
+#     templates_path = os.path.join(tmp_path, 'templates')
+#     list_file_path = os.path.join(templates_path, 'templates.yaml')
+
+#     shutil.copytree(os.path.join('tests', 'assets', 'templates'), templates_path)
+
+#     copier_utils.TEMPLATES_DIR = os.path.join(tmp_path, 'templates')
+#     copier_utils.TEMPLATES_FILE = os.path.join(copier_utils.TEMPLATES_DIR, 'templates.yaml')
+#     return copier_utils.TEMPLATES_DIR
 
 
 def test_load_yaml():
     nonyam = copier_utils.load_yaml('nonexist.yaml')
     assert nonyam is None, f'non-existent yaml file returned not None: {nonyam}'
     
-    yam = copier_utils.load_yaml(os.path.join('testassets', 'testyam.yml'))
+    yam = copier_utils.load_yaml(os.path.join('tests', 'assets', 'testyam.yml'))
     assert yam.get('a') == 'this is a test string', f'a has wrong value: {yam.get("a")}'
     
     b = yam.get('b')
@@ -43,29 +54,26 @@ def test_load_yaml():
     assert c[2] == False, f'c[2] has wrong value: {c[2]}'
 
 
-def test_get_templates():
+def test_get_templates(tmp_template_dir):
     yam = copier_utils.get_templates()
     assert isinstance(yam, dict), 'templates file is not a dict'
-    template = yam.get('copier-pylib')
-    assert template is not None, '"copier-pylib" not found in list'
-    assert template.get('path') == 'copier-pylib-test', f'path has wrong value: {template.get('path')}'
-    assert template.get('description') == 'testing version of copier-pylib template', f'description has wrong value: {template.get('path')}'
+
+    template = yam.get('sample_tmplt')
+    assert template is not None, '"sample_tmplt" not found in list'
+    assert template.get('path') == 'sample_template', f'path has wrong value: {template.get('path')}'
+    assert template.get('description') == 'minimal test dummy copier template', f'description has wrong value: {template.get('path')}'
 
 
-def test_add_template():
-    try:
-        copier_utils.add_template('testytemplate', 'uwu/owo/testytemplate', 'a made up template for testing')
-        yam = copier_utils.get_templates()
-        new_temp = yam.get('testytemplate')
-        assert new_temp is not None, 'failed to add template to list'
-        assert new_temp.get('path') == 'uwu/owo/testytemplate', f'path has wrong value: {new_temp.get('path')}'
-        assert new_temp.get('description') == 'a made up template for testing', f'description has wrong value: {new_temp.get('path')}'
-    finally:
-        os.remove(copier_utils.TEMPLATES_FILE)
-        shutil.copyfile(copier_utils.TEMPLATES_FILE + '.orig', copier_utils.TEMPLATES_FILE)
+def test_add_template(tmp_template_dir):
+    copier_utils.add_template('testytemplate', 'uwu/owo/testytemplate', 'a made up template for testing')
+    
+    yam = copier_utils.get_templates()
+    new_temp = yam.get('testytemplate')
+    assert new_temp is not None, 'failed to add template to list'
+    assert new_temp.get('path') == 'uwu/owo/testytemplate', f'path has wrong value: {new_temp.get('path')}'
+    assert new_temp.get('description') == 'a made up template for testing', f'description has wrong value: {new_temp.get('path')}'
 
 
-def test_get_template_path():
-    path = copier_utils.get_template_path('copier-pylib')
-    assert path == os.path.abspath(os.path.join(copier_utils.TEMPLATES_DIR, 'copier-pylib-test')), f'wrong template path: {path}'
-
+def test_get_template_path(tmp_template_dir):
+    path = copier_utils.get_template_path('sample_tmplt')
+    assert path == os.path.abspath(os.path.join(tmp_template_dir, 'sample_template')), f'wrong template path: {path}'

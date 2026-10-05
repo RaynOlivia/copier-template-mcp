@@ -14,7 +14,19 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-[pytest]
-pythonpath = .
-testpaths = tests
-asyncio_mode = auto
+import os
+import shutil
+import pytest
+import copier_utils
+
+
+@pytest.fixture
+def tmp_template_dir(tmp_path):
+    skel_path = os.path.join('tests', 'assets', 'templates')
+    templates_path = os.path.join(tmp_path, 'templates')
+
+    shutil.copytree(skel_path, templates_path)
+
+    copier_utils.TEMPLATES_DIR = templates_path
+    copier_utils.TEMPLATES_FILE = os.path.join(copier_utils.TEMPLATES_DIR, 'templates.yaml')
+    return copier_utils.TEMPLATES_DIR

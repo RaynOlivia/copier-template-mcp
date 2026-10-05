@@ -39,9 +39,9 @@ def load_yaml(file_path: str) -> dict|None:
     base_path, file_name = path.split(path.normpath(file_path))
     if not path.isdir(base_path):
         return None
-    file_base, file_ext = path.splitext(file_name)
+    file_base, _ = path.splitext(file_name)
 
-    options = [file_name]
+    options = [file_path]
     for ext in ('.yaml', '.yml'):
         new_opt = path.join(base_path, file_base + ext)
         if not new_opt in options:
@@ -191,7 +191,7 @@ class Generator():
                 data = {key: val['answer'] for key, val in self.data.items()},
                 overwrite = True,
                 quiet = True,
-                skip_tasks = True,
+                # skip_tasks = True,
                 skip_answered = True,
                 conflict = 'inline',
             )
@@ -205,7 +205,7 @@ class Generator():
                 data = {key: val['answer'] for key, val in self.data.items()},
                 overwrite = True,
                 quiet = True,
-                skip_tasks = True,
+                # skip_tasks = True,
             )
 
 
