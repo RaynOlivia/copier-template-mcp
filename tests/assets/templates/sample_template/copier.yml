@@ -64,5 +64,3 @@ number_picks:
     - 1312
     - 666
   multiselect: true
-
-# todo: test yaml file include

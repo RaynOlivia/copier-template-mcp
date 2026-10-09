@@ -216,7 +216,10 @@ class Generator():
 
     def _io_handler(self, in_queue, out_queue, questions, answers, **kwargs):
         question = questions[0]
-        log.debug(f'NEW QUESTION: {question['name']}')
+        if not question.get("when", lambda x: True)(666):
+            log.debug(f'QUESTION SKIPPED: {question["name"]}')
+            return {question['name']: ''}
+        log.debug(f'NEW QUESTION: {question["name"]}')
         log.debug('writing to queue')
         out_queue.put((cloudpickle.dumps(question), None))
         log.debug('waiting for client reply')

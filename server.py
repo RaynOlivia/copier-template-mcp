@@ -54,6 +54,7 @@ def get_python_type(copier_type: str):
 
 def get_param_request_model(params: dict, to_revise: list):
     fields = {}
+    log.debug(f'revising params: {to_revise}')
     for key in to_revise:
         match params[key]['question']['type']:
             case 'select':
@@ -73,12 +74,14 @@ def get_param_request_model(params: dict, to_revise: list):
 
 
 def get_next_question_output(question: dict, error: str|None = None) -> ToolResult:
+    log.debug('question getting output')
     response_dict = {
         'next_question': question.get('message', question['name']).strip(),
         'instructions': 'Call the `set_next_parameter` tool to submit an answer'
     }
     if 'choices' in question:
-        response_dict['options'] = question.choices
+        response_dict['options'] = [c.value or c.title for c in question['choices'] if not c.disabled]
+        log.debug(f'question getting output {response_dict}')
         if question['type'] == 'select':
             response_dict['instructions'] += ' Respond with one of the options'
         else:
@@ -155,7 +158,6 @@ async def start_new_generator(ctx: Context, update: bool, destination: str, temp
         generator.cancel()
 
     generator = copier_utils.Generator(template, destination, update)
-
     question, _ = generator.next_question()
     if question is None:
         return await finish_generation(ctx)
@@ -174,7 +176,8 @@ async def set_next_parameter(ctx: Context, response: str|list[str]):
     Returns:
         Next template parameter to set and instructions on what to do next
     """
-    # Next template parameter to set by calling the `set_next_parameter` tool again
+
+    log.debug(f'response: {response}')
     generator.respond(response)
     log.debug('getting next question')
     question, error = generator.next_question()
