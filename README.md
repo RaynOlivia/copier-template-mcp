@@ -26,7 +26,7 @@ pip install -r requirements.txt
     "requestTimeoutMs": 1800000
 }
 ```
-replace `<INSTALL_PATH>` with where you cloned the CopierMCP to
+replace `<INSTALL_PATH>` with where you cloned CopierMCP to
 
 <!-- ## Usage
 1. Ask agent to create a new project

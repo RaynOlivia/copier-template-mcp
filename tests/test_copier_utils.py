@@ -21,19 +21,6 @@ import copier_utils
 from tests.fixtures import tmp_template_dir
 
 
-# @pytest.fixture
-# def tmp_template_dir(tmp_path):
-#     skel_path = os.path.join('tests', 'assets', 'templates')
-#     templates_path = os.path.join(tmp_path, 'templates')
-#     list_file_path = os.path.join(templates_path, 'templates.yaml')
-
-#     shutil.copytree(os.path.join('tests', 'assets', 'templates'), templates_path)
-
-#     copier_utils.TEMPLATES_DIR = os.path.join(tmp_path, 'templates')
-#     copier_utils.TEMPLATES_FILE = os.path.join(copier_utils.TEMPLATES_DIR, 'templates.yaml')
-#     return copier_utils.TEMPLATES_DIR
-
-
 def test_load_yaml():
     nonyam = copier_utils.load_yaml('nonexist.yaml')
     assert nonyam is None, f'non-existent yaml file returned not None: {nonyam}'
@@ -76,4 +63,4 @@ def test_add_template(tmp_template_dir):
 
 def test_get_template_path(tmp_template_dir):
     path = copier_utils.get_template_path('sample_tmplt')
-    assert path == os.path.abspath(os.path.join(tmp_template_dir, 'sample_template')), f'wrong template path: {path}'
+    assert path == os.path.abspath(os.path.join(tmp_template_dir, 'templates', 'sample_template')), f'wrong template path: {path}'
